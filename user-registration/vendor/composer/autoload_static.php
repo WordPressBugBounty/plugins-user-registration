@@ -4,47 +4,63 @@
 
 namespace Composer\Autoload;
 
-class ComposerStaticInit35266d546f6a0a3b5aef3de57c1aef8c
+class ComposerStaticInit25d840391da1fa16bfd9d10aa09cca2b
 {
     public static $files = array (
         'bd0c90e7d8440ba632bcc936ba2deb8e' => __DIR__ . '/../..' . '/includes/Functions/CoreFunctions.php',
+        'bd707f902d8df450f623eb60fbfebe5d' => __DIR__ . '/..' . '/themegrill/themegrill-sdk/load.php',
     );
 
     public static $prefixLengthsPsr4 = array (
-        'W' => 
+        'W' =>
         array (
             'WPEverest\\URMembership\\Payment\\' => 31,
             'WPEverest\\URMembership\\' => 23,
+            'WPEverest\\URM\\Masteriyo\\' => 24,
             'WPEverest\\URM\\DiviBuilder\\' => 26,
+            'WPEverest\\URM\\ContentDrip\\' => 26,
+            'WPEverest\\URM\\Analytics\\' => 24,
         ),
-        'S' => 
+        'S' =>
         array (
             'Stripe\\' => 7,
         ),
-        'C' => 
+        'C' =>
         array (
             'Composer\\Installers\\' => 20,
         ),
     );
 
     public static $prefixDirsPsr4 = array (
-        'WPEverest\\URMembership\\Payment\\' => 
+        'WPEverest\\URMembership\\Payment\\' =>
         array (
             0 => __DIR__ . '/../..' . '/modules/payment-history',
         ),
-        'WPEverest\\URMembership\\' => 
+        'WPEverest\\URMembership\\' =>
         array (
             0 => __DIR__ . '/../..' . '/modules/membership/includes',
         ),
-        'WPEverest\\URM\\DiviBuilder\\' => 
+        'WPEverest\\URM\\Masteriyo\\' =>
+        array (
+            0 => __DIR__ . '/../..' . '/modules/masteriyo/includes',
+        ),
+        'WPEverest\\URM\\DiviBuilder\\' =>
         array (
             0 => __DIR__ . '/../..' . '/includes/3rd-party/DiviBuilder',
         ),
-        'Stripe\\' => 
+        'WPEverest\\URM\\ContentDrip\\' =>
+        array (
+            0 => __DIR__ . '/../..' . '/modules/content-drip/includes',
+        ),
+        'WPEverest\\URM\\Analytics\\' =>
+        array (
+            0 => __DIR__ . '/../..' . '/includes/Analytics',
+        ),
+        'Stripe\\' =>
         array (
             0 => __DIR__ . '/..' . '/stripe/stripe-php/lib',
         ),
-        'Composer\\Installers\\' => 
+        'Composer\\Installers\\' =>
         array (
             0 => __DIR__ . '/..' . '/composer/installers/src/Composer/Installers',
         ),
@@ -57,9 +73,9 @@ class ComposerStaticInit35266d546f6a0a3b5aef3de57c1aef8c
     public static function getInitializer(ClassLoader $loader)
     {
         return \Closure::bind(function () use ($loader) {
-            $loader->prefixLengthsPsr4 = ComposerStaticInit35266d546f6a0a3b5aef3de57c1aef8c::$prefixLengthsPsr4;
-            $loader->prefixDirsPsr4 = ComposerStaticInit35266d546f6a0a3b5aef3de57c1aef8c::$prefixDirsPsr4;
-            $loader->classMap = ComposerStaticInit35266d546f6a0a3b5aef3de57c1aef8c::$classMap;
+            $loader->prefixLengthsPsr4 = ComposerStaticInit25d840391da1fa16bfd9d10aa09cca2b::$prefixLengthsPsr4;
+            $loader->prefixDirsPsr4 = ComposerStaticInit25d840391da1fa16bfd9d10aa09cca2b::$prefixDirsPsr4;
+            $loader->classMap = ComposerStaticInit25d840391da1fa16bfd9d10aa09cca2b::$classMap;
 
         }, null, ClassLoader::class);
     }

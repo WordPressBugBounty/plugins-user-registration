@@ -44,6 +44,7 @@
 		border-radius: 8px;
 		z-index: 99999;
 		box-shadow: 0 3px 25px 0px transparentize($gray_base, 0.6);
+
 		@media (min-width: 576px) {
 			max-width: 500px;
 			margin: auto;
@@ -145,6 +146,7 @@
 		}
 
 		.swal2-animate-success-icon {
+
 			& [class^="swal2-success-line"],
 			& [class^="swal2-success-circular-line"] {
 				animation: none;
@@ -154,12 +156,16 @@
 
 	.swal2-header {
 		.swal2-icon {
-			width: 56px;
-			height: 56px;
+			width: 28px;
+			height: 28px;
 			line-height: 56px;
-			margin: 0 auto 16px;
+			margin: 0 auto;
 			border-width: 2px;
 			border-radius: 50%;
+
+			&-content {
+				font-size: 20px;
+			}
 
 			.swal2-x-mark {
 				& [class^="swal2-x-mark-line"] {
@@ -284,11 +290,12 @@
 			flex-direction: column;
 		}
 	}
-// }
+
+	// }
 }
 
 //Modal z-index fix
-.user-registration-modal-open{
+.user-registration-modal-open {
 	.wp-block-cover {
 		z-index: 99;
 	}
@@ -300,12 +307,18 @@
 	.swal2-container {
 		.swal2-popup {
 			width: 400px;
-			border-radius: $spacing_10px;
+			border-radius: $border_radius_5;
 			padding: 0;
 			margin: auto;
 
 			.swal2-header {
 				padding: $spacing_20px;
+
+				gap: $spacing_12px;
+				border-bottom: $border_width solid $border-color;
+				margin-bottom: $spacing_20px;
+				padding-bottom: $spacing_16px;
+				flex-direction: row;
 
 				.swal2-title {
 					display: flex !important;
@@ -315,6 +328,10 @@
 					padding-bottom: $spacing_16px;
 					width: 100%;
 					margin-bottom: 0;
+
+					flex: 1;
+					border-bottom: 0;
+					padding-bottom: 0;
 
 					.dashicons {
 						font-size: 18px;
@@ -344,10 +361,19 @@
 				line-height: 24px;
 				color: $grey-400;
 
+				&:has(.membership-upgrade-container) {
+					margin-bottom: 12px;
+				}
+
 				.swal2-html-container {
 					> div {
-						border-radius: $spacing_8px;
-						overflow: hidden;
+						border-radius: $spacing_4px;
+						// overflow: hidden;
+
+						&.ur-embed-new-page-container,
+						&.ur-embed-select-existing-page-container {
+							justify-content: flex-start;
+						}
 					}
 
 					.action-buttons {
@@ -400,12 +426,14 @@
 					line-height: 20px;
 					font-weight: $regular;
 					padding: 0 $spacing_12px;
-					width: 45%;
+					// width: 45%;
+					flex: 1;
 				}
 
 				.swal2-confirm {
-					background: #ff4149;
-					border-color: #ff4149;
+					color: var(--ur-button-text-normal-color, $white) !important;
+					background: var(--ur-button-background-normal-color, $primary_color);
+					border: $border_width solid var(--ur-button-background-normal-color, $primary_color);
 				}
 
 				.swal2-cancel {
@@ -423,6 +451,52 @@
 					}
 				}
 
+			}
+		}
+	}
+}
+
+.user-registration-trashed {
+	.swal2-actions {
+		.swal2-confirm {
+			background: #ff4149;
+			border-color: #ff4149;
+		}
+	}
+}
+
+// Form Builder Keyboard Shortcut popup css
+.jconfirm {
+	&:has(.ur-shortcut-keyword) {
+		.jconfirm-cell {
+			padding-left: 35%;
+			padding-right: 35%;
+		}
+
+		.jconfirm-box {
+			border: 0 !important;
+			border-radius: $border_radius_7;
+
+			.jconfirm-title-c {
+				.jconfirm-icon-c {
+
+					.dashicons,
+					.dashicons::before {
+						width: auto;
+						height: auto;
+						font-size: 28px;
+					}
+				}
+			}
+
+			.jconfirm-content-pane {
+				.ur-shortcut-keyword {
+					.ur-shortcut-title {
+						font-size: 16px;
+						line-height: 24px;
+						color: #1f2937;
+					}
+				}
 			}
 		}
 	}

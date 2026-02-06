@@ -94,7 +94,7 @@ if ( ! class_exists( 'UR_Settings_Successfully_Registered_Email', false ) ) :
 									'desc'     => __( 'The email subject you want to customize.', 'user-registration' ),
 									'id'       => 'user_registration_successfully_registered_email_subject',
 									'type'     => 'text',
-									'default'  => __( 'Registration Successful – Welcome to {{blog_info}}!', 'user-registration' ),
+									'default'  => __( 'Welcome to {{blog_info}}!', 'user-registration' ),
 									'css'      => '',
 									'desc_tip' => true,
 								),
@@ -106,6 +106,9 @@ if ( ! class_exists( 'UR_Settings_Successfully_Registered_Email', false ) ) :
 									'default'  => $this->ur_get_successfully_registered_email(),
 									'css'      => '',
 									'desc_tip' => true,
+									'show-ur-registration-form-button' => false,
+									'show-smart-tags-button' => true,
+									'show-reset-content-button' => true,
 								),
 							),
 						),
@@ -129,26 +132,44 @@ if ( ! class_exists( 'UR_Settings_Successfully_Registered_Email', false ) ) :
 		public function ur_get_successfully_registered_email() {
 
 			/**
+			 * Filter to overwrite the successfully registered email.
+			 *
+			 * @param string Message content to overwrite the existing email content.
+			 */
+			$body_content = __(
+				'<p style="margin: 0 0 16px 0; color: #000000; font-size: 16px; line-height: 1.6;">
+					Hi {{username}},
+				</p>
+				<p style="margin: 0 0 16px 0; color: #000000; font-size: 16px; line-height: 1.6;">
+				Welcome to <a href="{{home_url}}" style="color: #4A90E2; text-decoration: none;">{{blog_info}}</a>! Your registration is complete.
+				</p>
+				<p style="margin: 0 0 16px 0; color: #000000; font-size: 16px; line-height: 1.6;">
+					{{membership_plan_details}}
+				</p>
+				<p style="margin: 0 0 16px 0; color: #000000; font-size: 16px; line-height: 1.6;">
+				Get started by visiting your account dashboard:
+				</p>
+				<p style="margin: 0 0 16px 0; color: #000000; font-size: 16px; line-height: 1.6;">
+				{{my_account_link}}
+				</p>
+				<p style="margin: 0 0 16px 0; color: #000000; font-size: 16px; line-height: 1.6;">
+				Thanks
+				</p>
+				',
+				'user-registration'
+			);
+			$body_content = ur_wrap_email_body_content( $body_content );
+
+			if ( UR_PRO_ACTIVE && function_exists( 'ur_get_email_template_wrapper' ) ) {
+				$body_content = ur_get_email_template_wrapper( $body_content, false );
+			}
+
+			/**
 			 * Filter to modify the message content for successfully registered email.
 			 *
-			 * @param string Message content for successfully registered email to be overridden.
+			 * @param string $body_content Message content for successfully registered email to be overridden.
 			 */
-			$message = apply_filters(
-				'user_registration_get_successfully_registered_email',
-				sprintf(
-					__(
-						'Hi {{username}}, <br/>
-						Congratulations! You have successfully completed your registration on <a href="{{home_url}}">{{blog_info}}</a>. <br/>
-
-						{{membership_plan_details}}
-
-						Please visit \'<b>My Account</b>\' page to edit your account details and create your user profile. <br/>
-
-						Thank You!',
-						'user-registration'
-					)
-				)
-			);
+			$message = apply_filters( 'user_registration_get_successfully_registered_email', $body_content );
 
 			return $message;
 		}
