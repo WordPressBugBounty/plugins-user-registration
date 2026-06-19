@@ -29,9 +29,9 @@
             'dev_requirement' => false,
         ),
         'themegrill/themegrill-sdk' => array(
-            'pretty_version' => '1.0.1',
-            'version' => '1.0.1.0',
-            'reference' => 'bdcd3b56256ce3126054d0dabb22fe8563b0becc',
+            'pretty_version' => '1.0.4',
+            'version' => '1.0.4.0',
+            'reference' => '2787bc7bcd0c5d6bf470c986682fd74b390d34c3',
             'type' => 'library',
             'install_path' => __DIR__ . '/../themegrill/themegrill-sdk',
             'aliases' => array(),
