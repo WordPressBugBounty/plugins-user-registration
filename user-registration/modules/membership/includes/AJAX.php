@@ -158,7 +158,12 @@ class AJAX {
 				$data['membership_id'] = $new_membership_ID;
 				$membership_repository = new MembershipRepository();
 				$membership            = $membership_repository->get_single_membership_by_ID( $new_membership_ID );
-				$stripe_service->sync_product_and_price_in_stripe( $membership );
+				try {
+					$stripe_service->sync_product_and_price_in_stripe( $membership );
+				} catch ( \Exception $e ) {
+					wp_delete_post( $new_membership_ID, true );
+					wp_send_json_error( array( 'message' => $e->getMessage() ) );
+				}
 			}
 
 			// Create or update content access rule if rule data provided
@@ -229,6 +234,22 @@ class AJAX {
 		}
 
 		$data = apply_filters( 'ur_membership_after_create_membership_data_prepare', $data );
+
+		if ( $is_stripe_enabled ) {
+			$meta_data_check = json_decode( $data['post_meta_data']['ur_membership']['meta_value'], true );
+			if (
+				'free' !== $meta_data_check['type'] &&
+				isset( $meta_data_check['subscription']['duration'], $meta_data_check['subscription']['value'] ) &&
+				'year' === $meta_data_check['subscription']['duration'] &&
+				(int) $meta_data_check['subscription']['value'] > 3
+			) {
+				wp_send_json_error(
+					array(
+						'message' => __( 'Stripe does not support yearly subscription periods greater than 3 years.', 'user-registration' ),
+					)
+				);
+			}
+		}
 
 		$updated_ID = wp_insert_post( $data['post_data'] );
 
@@ -836,6 +857,33 @@ class AJAX {
 		}
 	}
 
+	/**
+	 * Verify a logged-out payment confirmation belongs to the browser that created
+	 * this pending registration: the cookie must match the signup transient, or
+	 * (UR-4727) the server-recomputed HMAC when the transient was cleared mid-flow.
+	 *
+	 * @param int $member_id Pending member/user ID.
+	 * @return bool
+	 */
+	private static function verify_pending_member_session( $member_id ) {
+		$cookie_key   = 'urm_pending_login_' . $member_id;
+		$cookie_token = isset( $_COOKIE[ $cookie_key ] ) ? wp_unslash( $_COOKIE[ $cookie_key ] ) : '';
+
+		if ( empty( $cookie_token ) ) {
+			return false;
+		}
+
+		$saved_hash = get_transient( $cookie_key );
+		if ( ! empty( $saved_hash ) && hash_equals( (string) $saved_hash, (string) $cookie_token ) ) {
+			return true;
+		}
+
+		// Fallback: transient gone but the cookie still proves this browser registered.
+		$expected_hash = hash_hmac( 'sha256', (string) $member_id, wp_salt( 'auth' ) );
+
+		return hash_equals( $expected_hash, (string) $cookie_token );
+	}
+
 	public static function confirm_payment() {
 
 		ur_membership_verify_nonce( 'urm_confirm_payment' );
@@ -882,9 +930,7 @@ class AJAX {
 			}
 		} else {
 			// Nopriv: bind to the registration session that created this pending member.
-			$saved_hash   = get_transient( 'urm_pending_login_' . $member_id );
-			$cookie_token = isset( $_COOKIE[ 'urm_pending_login_' . $member_id ] ) ? wp_unslash( $_COOKIE[ 'urm_pending_login_' . $member_id ] ) : '';
-			if ( empty( $saved_hash ) || empty( $cookie_token ) || ! hash_equals( (string) $saved_hash, (string) $cookie_token ) ) {
+			if ( ! self::verify_pending_member_session( $member_id ) ) {
 				wp_send_json_error(
 					array(
 						'message' => __( 'You are not allowed to edit this user.', 'user-registration' ),
@@ -905,8 +951,9 @@ class AJAX {
 				$is_delayed            = ! empty( $next_subscription['delayed_until'] );
 				if ( ! empty( $previous_subscription ) && ! $is_delayed ) {
 					$previous_subscription = json_decode( $previous_subscription, true );
-					$stripe_service        = new StripeService();
-					$stripe_service->cancel_subscription( array(), $previous_subscription );
+					$previous_order        = json_decode( get_user_meta( $member_id, 'urm_previous_order_data', true ), true );
+					$subscription_service  = new SubscriptionService();
+					$subscription_service->cancel_subscription( is_array( $previous_order ) ? $previous_order : array(), $previous_subscription, true );
 					delete_user_meta( $member_id, 'urm_next_subscription_data' );
 					delete_user_meta( $member_id, 'urm_previous_subscription_data' );
 					delete_user_meta( $member_id, 'urm_previous_order_data' );
@@ -1090,6 +1137,19 @@ class AJAX {
 			);
 		} else {
 			$message = isset( $cancel_status['message'] ) ? $cancel_status['message'] : esc_html__( 'Something went wrong while cancelling your subscription. Please contact support', 'user-registration' );
+
+			$payload = array(
+				'subscription_id' => $order['subscription_id'],
+				'member_id'       => $order['user_id'],
+				'event_type'      => 'cancellation_failed',
+				'meta'            => array(
+					'order_id'       => $order ? $order['ID'] : 0,
+					'payment_method' => $payment_gateway,
+				),
+			);
+
+			do_action( 'ur_membership_subscription_event_triggered', $payload );
+
 			wp_send_json_error(
 				array(
 					'message' => $message,
@@ -1133,9 +1193,7 @@ class AJAX {
 			}
 		} else {
 			// Nopriv: bind to the registration session that created this pending member.
-			$saved_hash   = get_transient( 'urm_pending_login_' . $member_id );
-			$cookie_token = isset( $_COOKIE[ 'urm_pending_login_' . $member_id ] ) ? wp_unslash( $_COOKIE[ 'urm_pending_login_' . $member_id ] ) : '';
-			if ( empty( $saved_hash ) || empty( $cookie_token ) || ! hash_equals( (string) $saved_hash, (string) $cookie_token ) ) {
+			if ( ! self::verify_pending_member_session( $member_id ) ) {
 				wp_send_json_error(
 					array(
 						'message' => __( 'You are not allowed to edit this user.', 'user-registration' ),
@@ -1458,7 +1516,6 @@ class AJAX {
 		if ( 'group' == $list_type ) {
 			$membership_group_service = new MembershipGroupService();
 			$membership_plans         = $membership_group_service->get_group_memberships( $group_id );
-			$membership_plans         = apply_filters( 'build_membership_list_frontend', $membership_plans );
 		} else {
 			$membership_service = new MembershipService();
 			$membership_plans   = $membership_service->list_active_memberships();
@@ -1834,6 +1891,12 @@ class AJAX {
 			'ur_authorize_net'        => $ur_authorize_data,
 		);
 
+		// Forward the local-currency zone the member checked out in.
+		if ( ! empty( $_POST['switched_currency'] ) && ! empty( $_POST['urm_zone_id'] ) ) {
+			$data['switched_currency'] = sanitize_text_field( $_POST['switched_currency'] );
+			$data['urm_zone_id']       = sanitize_text_field( $_POST['urm_zone_id'] );
+		}
+
 		if ( ! empty( $_POST['coupon'] ) ) {
 			$data['coupon'] = sanitize_text_field( $_POST['coupon'] );
 		}
@@ -2105,8 +2168,19 @@ class AJAX {
 			'is_purchasing_multiple' => true,
 		);
 
+		// Forward the local-currency zone the member checked out in.
+		if ( ! empty( $_POST['switched_currency'] ) && ! empty( $_POST['urm_zone_id'] ) ) {
+			$data['switched_currency'] = sanitize_text_field( $_POST['switched_currency'] );
+			$data['urm_zone_id']       = sanitize_text_field( $_POST['urm_zone_id'] );
+		}
+
 		if ( ! empty( $_POST['coupon'] ) ) {
 			$data['coupon'] = sanitize_text_field( $_POST['coupon'] );
+		}
+
+		if ( ! empty( $_POST['tax_rate'] ) ) {
+			$data['tax_rate']               = sanitize_text_field( $_POST['tax_rate'] );
+			$data['tax_calculation_method'] = ! empty( $_POST['tax_calculation_method'] ) ? sanitize_text_field( $_POST['tax_calculation_method'] ) : '1';
 		}
 
 		if ( ! empty( $user_membership_ids ) ) {
@@ -2770,8 +2844,24 @@ class AJAX {
 			);
 		}
 
+		if ( ! ur_check_module_activation( 'local-currency' ) || ! class_exists( CoreFunctions::class ) ) {
+			wp_send_json_success(
+				array(
+					'message' => __( 'Currency is valid.', 'user-registration' ),
+				)
+			);
+		}
+
 		$zone_data = CoreFunctions::ur_get_pricing_zone_by_id( $zone_id );
-		$currency  = $zone_data['meta']['ur_local_currency'][0];
+		$currency  = ! empty( $zone_data['meta']['ur_local_currency'][0] ) ? $zone_data['meta']['ur_local_currency'][0] : '';
+
+		if ( empty( $currency ) ) {
+			wp_send_json_success(
+				array(
+					'message' => __( 'Currency is invalid.', 'user-registration' ),
+				)
+			);
+		}
 
 		$currency_not_supported_payment_gateways = array();
 

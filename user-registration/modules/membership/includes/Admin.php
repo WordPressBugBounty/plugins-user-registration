@@ -187,7 +187,83 @@ if ( ! class_exists( 'Admin' ) ) :
 
 			add_action( 'user_registration_single_user_details_content', array( $this, 'render_user_membership_details' ), 10, 2 );
 
+			add_action( 'urm_member_registered', array( $this, 'maybe_fire_deferred_after_register' ), 5, 2 );
 			add_action( 'urm_member_registered', array( $this, 'send_registration_emails' ), 10, 2 );
+			add_action( 'user_registration_check_token_complete', array( $this, 'send_membership_welcome_on_email_confirmation' ), 10, 2 );
+		}
+
+		/**
+		 * Send the membership welcome email after the user confirms their email address.
+		 *
+		 * For membership forms the welcome email comes from EmailService (the core UR_Emailer welcome is
+		 * `! is_membership_form`-gated). With the `email_confirmation` login option that EmailService
+		 * welcome runs via urm_member_registered at registration, while `ur_confirm_email` is still 0, so
+		 * its "email confirmed" gate skips it — and nothing re-sends it once the user verifies. Send it here,
+		 * now that the email is confirmed. `admin_approval_after_email_confirmation` is excluded: those
+		 * members still await admin approval, so their welcome belongs to the approval step. UR-4681.
+		 *
+		 * @param int  $user_id             Confirmed user ID.
+		 * @param bool $user_reg_successful Whether the token check succeeded.
+		 */
+		public function send_membership_welcome_on_email_confirmation( $user_id, $user_reg_successful ) {
+			if ( empty( $user_reg_successful ) || 'email_confirmation' !== ur_get_user_login_option( $user_id ) ) {
+				return;
+			}
+
+			// Only membership forms need this — non-membership welcome is sent by core UR_Emailer on confirmation.
+			if ( ! check_membership_field_in_form( ur_get_form_id_by_userid( $user_id ) ) ) {
+				return;
+			}
+
+			// Send once.
+			if ( ur_string_to_bool( get_user_meta( $user_id, 'ur_membership_confirm_welcome_sent', true ) ) ) {
+				return;
+			}
+			update_user_meta( $user_id, 'ur_membership_confirm_welcome_sent', true );
+
+			$user = get_userdata( $user_id );
+			if ( ! $user ) {
+				return;
+			}
+
+			( new EmailService() )->send_email(
+				array(
+					'member_id' => $user_id,
+					'email'     => $user->user_email,
+				),
+				'user_register_user'
+			);
+		}
+
+		/**
+		 * Replay the deferred `user_registration_after_register_user_action` hook once paid payment
+		 * is confirmed, so paid memberships get the approval / email-confirmation emails (and the
+		 * confirmation token) that free memberships fire at submission — the hook is suppressed for
+		 * paid (see set_payment_process_for_membership()). set_login_gate_for_pending_member() only
+		 * seeds the login gate; this sends the emails. Welcome / admin emails are `! is_membership_form`-
+		 * gated in UR_Emailer, so this does not duplicate them. UR-4681.
+		 *
+		 * @param array $data      Member data prepared during registration.
+		 * @param int   $member_id Newly created WP user ID.
+		 */
+		public function maybe_fire_deferred_after_register( $data, $member_id ) {
+			$deferred = get_user_meta( $member_id, 'ur_deferred_after_register_args', true );
+
+			if ( empty( $deferred ) || ! is_array( $deferred ) || ! isset( $deferred['form_data'] ) ) {
+				return;
+			}
+
+			// Fire once — gateways may signal completion more than once (e.g. webhook + return URL).
+			if ( ur_string_to_bool( get_user_meta( $member_id, 'ur_deferred_after_register_fired', true ) ) ) {
+				return;
+			}
+			update_user_meta( $member_id, 'ur_deferred_after_register_fired', true );
+
+			$form_id = isset( $deferred['form_id'] ) ? absint( $deferred['form_id'] ) : ur_get_form_id_by_userid( $member_id );
+
+			do_action( 'user_registration_after_register_user_action', $deferred['form_data'], $form_id, $member_id );
+
+			delete_user_meta( $member_id, 'ur_deferred_after_register_args' );
 		}
 
 		/**
@@ -281,6 +357,18 @@ if ( ! class_exists( 'Admin' ) ) :
 			}
 
 			$success_params['payment_process'] = true;
+
+			// payment_process suppresses the core after_register hook for paid memberships; stash its
+			// args so maybe_fire_deferred_after_register() can replay it once payment completes. UR-4681.
+			update_user_meta(
+				$user_id,
+				'ur_deferred_after_register_args',
+				array(
+					'form_data' => $valid_form_data,
+					'form_id'   => $form_id,
+				)
+			);
+
 			return $success_params;
 		}
 
@@ -435,25 +523,30 @@ if ( ! class_exists( 'Admin' ) ) :
 			// is never a valid gateway for a non-free membership.
 			if ( 'free' !== $membership_type ) {
 				if ( 'free' === $data['payment_method'] ) {
-					wp_delete_user( absint( $member_id ) );
-					wp_send_json_error( array( 'message' => esc_html__( 'Invalid payment method for this membership.', 'user-registration' ) ) );
-				}
-				$configured_gateways = array();
-				if ( ! empty( $membership_meta['payment_gateways'] ) && is_array( $membership_meta['payment_gateways'] ) ) {
-					foreach ( $membership_meta['payment_gateways'] as $gw_key => $gw_data ) {
-						if ( isset( $gw_data['status'] ) && 'on' === $gw_data['status'] ) {
-							$configured_gateways[] = $gw_key;
+					// UR-4386: 'free' on a paid plan is only valid when a 100% coupon zeroes a
+					// one-time plan (free order, no gateway). Re-validate server-side; reject a forge.
+					if ( ! $this->is_full_discount_free_order( $membership_type, $membership_meta, $data ) ) {
+						wp_delete_user( absint( $member_id ) );
+						wp_send_json_error( array( 'message' => esc_html__( 'Invalid payment method for this membership.', 'user-registration' ) ) );
+					}
+				} else {
+					$configured_gateways = array();
+					if ( ! empty( $membership_meta['payment_gateways'] ) && is_array( $membership_meta['payment_gateways'] ) ) {
+						foreach ( $membership_meta['payment_gateways'] as $gw_key => $gw_data ) {
+							if ( isset( $gw_data['status'] ) && 'on' === $gw_data['status'] ) {
+								$configured_gateways[] = $gw_key;
+							}
 						}
 					}
-				}
-				// Also include globally active gateways (Settings > Payments) so that
-				// gateways enabled site-wide are accepted even if not per-membership saved.
-				$global_gateways     = array_keys( urm_get_all_active_payment_gateways( $membership_type ) );
-				$configured_gateways = array_unique( array_merge( $configured_gateways, $global_gateways ) );
+					// Also include globally active gateways (Settings > Payments) so that
+					// gateways enabled site-wide are accepted even if not per-membership saved.
+					$global_gateways     = array_keys( urm_get_all_active_payment_gateways( $membership_type ) );
+					$configured_gateways = array_unique( array_merge( $configured_gateways, $global_gateways ) );
 
-				if ( ! empty( $configured_gateways ) && ! in_array( $data['payment_method'], $configured_gateways, true ) ) {
-					wp_delete_user( absint( $member_id ) );
-					wp_send_json_error( array( 'message' => esc_html__( 'Invalid payment method for this membership.', 'user-registration' ) ) );
+					if ( ! empty( $configured_gateways ) && ! in_array( $data['payment_method'], $configured_gateways, true ) ) {
+						wp_delete_user( absint( $member_id ) );
+						wp_send_json_error( array( 'message' => esc_html__( 'Invalid payment method for this membership.', 'user-registration' ) ) );
+					}
 				}
 			}
 
@@ -569,9 +662,23 @@ if ( ! class_exists( 'Admin' ) ) :
 					}
 				}
 
-				if ( 'free' === $data['payment_method'] ) {
+				// Free and bank settle synchronously at registration — no gateway redirect/webhook fires
+				// urm_member_registered later — so fire it now (drives send_registration_emails and the
+				// deferred after_register replay). Async gateways fire it on payment completion. UR-4681.
+				//
+				// Exception: bank + 'payment' (payment before login). The bank order is still pending until an
+				// admin confirms it, so the welcome must wait for that confirmation — defer it like an async
+				// gateway. approve_payment() replays urm_member_registered once the order is marked 'completed',
+				// so the welcome is delivered exactly once, after payment, instead of prematurely at submission.
+				$defer_bank_payment = ( 'bank' === $data['payment_method'] && 'payment' === ur_get_user_login_option( $member_id ) );
+
+				if ( in_array( $data['payment_method'], array( 'free', 'bank' ), true ) && ! $defer_bank_payment ) {
 					do_action( 'urm_member_registered', $data, $member_id );
 				} else {
+					// Paid async path (and deferred bank+payment) skips user_registration_after_register_user_action
+					// (payment_process=true), so the core login-gate setters never run before payment. Seed the gate
+					// now; the emails follow on completion via maybe_fire_deferred_after_register(). UR-4681.
+					$this->set_login_gate_for_pending_member( $member_id );
 					update_user_meta( $member_id, 'ur_membership_registration_data', $data );
 				}
 
@@ -596,6 +703,65 @@ if ( ! class_exists( 'Admin' ) ) :
 				$message = isset( $response['message'] ) ? $response['message'] : esc_html__( 'Sorry! There was an unexpected error while registering the user.', 'user-registration' );
 				wp_send_json_error( array( 'message' => $message ) );
 			}
+		}
+
+		/**
+		 * Seed the admin-approval / email-confirmation login gate for a paid member, since the
+		 * core setters on user_registration_after_register_user_action are skipped for paid
+		 * registrations. Writes only the gate meta (no emails), so email order is unchanged.
+		 * The 'payment' option is gated separately in UR_User_Approval::check_status_on_login().
+		 * UR-4681.
+		 *
+		 * @param int $member_id New member user ID.
+		 */
+		private function set_login_gate_for_pending_member( $member_id ) {
+			$login_option = ur_get_user_login_option( $member_id );
+
+			// Only the approval / email-confirmation gates need seeding here.
+			if ( ! in_array( $login_option, array( 'admin_approval', 'email_confirmation', 'admin_approval_after_email_confirmation' ), true ) ) {
+				return;
+			}
+
+			// Never override a status that has somehow already been written (e.g. the core hook ran).
+			if ( metadata_exists( 'user', $member_id, 'ur_user_status' ) || metadata_exists( 'user', $member_id, 'ur_confirm_email' ) ) {
+				return;
+			}
+
+			if ( 'admin_approval' === $login_option ) {
+				$user_manager = new \UR_Admin_User_Manager( $member_id );
+				$user_manager->save_status( \UR_Admin_User_Manager::PENDING, false );
+			} elseif ( 'email_confirmation' === $login_option ) {
+				update_user_meta( $member_id, 'ur_confirm_email', 0 );
+			} elseif ( 'admin_approval_after_email_confirmation' === $login_option ) {
+				update_user_meta( $member_id, 'ur_confirm_email', 0 );
+				update_user_meta( $member_id, 'ur_admin_approval_after_email_confirmation', 'false' );
+				update_user_meta( $member_id, 'ur_user_status', \UR_Admin_User_Manager::PENDING );
+			}
+		}
+		/*
+		 * Whether a payment_method="free" submission on a non-free plan is a legitimate 100%-coupon
+		 * free order. Only ONE-TIME (paid) plans qualify; the coupon is re-validated against the DB
+		 * so a forged payment_method="free" cannot bypass payment. UR-4386.
+		 *
+		 * @param string $membership_type Membership type (free|paid|subscription).
+		 * @param array  $membership_meta Membership meta.
+		 * @param array  $data            Submitted registration data.
+		 * @return bool
+		 */
+		private function is_full_discount_free_order( $membership_type, $membership_meta, $data ) {
+			if ( 'paid' !== $membership_type || empty( $data['coupon'] ) || ! ur_check_module_activation( 'coupon' ) ) {
+				return false;
+			}
+			$coupon_details = ur_get_coupon_details( sanitize_text_field( $data['coupon'] ) );
+			if ( empty( $coupon_details ) || empty( $coupon_details['coupon_status'] ) ) {
+				return false;
+			}
+			$plan_amount    = floatval( $membership_meta['amount'] ?? 0 );
+			$discount_type  = $coupon_details['coupon_discount_type'] ?? 'fixed';
+			$discount_value = floatval( $coupon_details['coupon_discount'] ?? 0 );
+			$discount       = ( 'percent' === $discount_type ) ? ( $plan_amount * $discount_value / 100 ) : $discount_value;
+
+			return ( $plan_amount > 0 ) && ( 0.0 === round( max( 0, $plan_amount - $discount ), 2 ) );
 		}
 
 		public function update_redirect_url_for_membership( $redirect_url, $form_id ) {
