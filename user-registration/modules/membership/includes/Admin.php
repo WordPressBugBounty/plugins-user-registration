@@ -16,6 +16,8 @@ use WPEverest\URMembership\Admin\Members\Members;
 use WPEverest\URMembership\Admin\Membership\Membership;
 use WPEverest\URMembership\Admin\Repositories\MembershipRepository;
 use WPEverest\URMembership\Admin\Repositories\MembersRepository;
+use WPEverest\URMembership\Admin\Repositories\OrdersRepository;
+use WPEverest\URMembership\Admin\Services\CouponService;
 use WPEverest\URMembership\Admin\Services\EmailService;
 use WPEverest\URMembership\Admin\Services\MembershipService;
 use WPEverest\URMembership\Admin\Services\MembershipGroupService;
@@ -133,6 +135,7 @@ if ( ! class_exists( 'Admin' ) ) :
 			add_action( 'init', array( 'WPEverest\URMembership\ShortCodes', 'init' ) );
 			add_action( 'init', array( $this, 'add_membership_options' ) );
 			add_action( 'plugins_loaded', array( $this, 'include_membership_payment_files' ) );
+			add_action( 'admin_notices', array( 'WPEverest\URMembership\Admin\Services\Paypal\NewPaypalService', 'user_registration_scheduled_cancellation_notice' ) );
 			// add_filter( 'user_registration_get_settings_pages', array( $this, 'add_membership_settings_page' ), 10, 1 );
 
 			add_filter(
@@ -191,6 +194,152 @@ if ( ! class_exists( 'Admin' ) ) :
 			add_action( 'urm_member_registered', array( $this, 'maybe_fire_deferred_after_register' ), 5, 2 );
 			add_action( 'urm_member_registered', array( $this, 'send_registration_emails' ), 10, 2 );
 			add_action( 'user_registration_check_token_complete', array( $this, 'send_membership_welcome_on_email_confirmation' ), 10, 2 );
+			// Orders cascade away with their user, so unfinished ones give their coupon use back first.
+			add_action( 'delete_user', array( new OrdersRepository(), 'release_member_coupon_claims' ) );
+			add_action( 'user_registration_after_register_user_action', array( $this, 'maybe_assign_default_free_membership_on_social_connect' ), 25, 3 );
+			add_filter( 'user_registration_other_social_settings', array( $this, 'add_social_connect_membership_settings' ), 10, 1 );
+		}
+
+		/**
+		 * Add Free membership Social Connect options under Registration & Login → Social Connect → Advanced Settings.
+		 *
+		 * @since 5.3.0
+		 *
+		 * @param array $settings Social Connect advanced settings.
+		 * @return array
+		 */
+		public function add_social_connect_membership_settings( $settings ) {
+			if ( ! ur_check_module_activation( 'membership' ) ) {
+				return $settings;
+			}
+
+			if ( empty( $settings['sections']['user_registration_social_advance_options']['settings'] ) || ! is_array( $settings['sections']['user_registration_social_advance_options']['settings'] ) ) {
+				return $settings;
+			}
+
+			$settings_list = &$settings['sections']['user_registration_social_advance_options']['settings'];
+			$insert_at     = null;
+
+			foreach ( $settings_list as $index => &$field ) {
+				if ( empty( $field['id'] ) || 'user_registration_social_setting_default_user_role' !== $field['id'] ) {
+					continue;
+				}
+
+				// Membership assignment replaces the social default role on signup; hide this when that path is active.
+				$field['desc']              = __( 'WordPress role for social registrants when Assign Free Membership is disabled.', 'user-registration' );
+				$field['display_condition'] = array(
+					'field'    => 'user_registration_membership_assign_free_on_social_connect',
+					'operator' => 'not_equals',
+					'value'    => 'yes',
+					'case'     => 'insensitive',
+				);
+				$insert_at                  = $index + 1;
+				break;
+			}
+			unset( $field );
+
+			$membership_fields = array(
+				array(
+					'title'    => __( 'Assign Free Membership', 'user-registration' ),
+					'desc'     => __( 'Assign a Free plan when Social Connect skips membership selection. The plan’s WordPress role is applied instead of Default user role.', 'user-registration' ),
+					'id'       => 'user_registration_membership_assign_free_on_social_connect',
+					'type'     => 'toggle',
+					'default'  => false,
+					'autoload' => false,
+					'desc_tip' => true,
+				),
+				array(
+					'title'             => __( 'Default Free Membership', 'user-registration' ),
+					'desc'              => __( 'Free membership assigned when Social Connect registration skips membership selection.', 'user-registration' ),
+					'id'                => 'user_registration_membership_social_connect_default_plan',
+					'type'              => 'select',
+					'default'           => '',
+					'class'             => 'ur-enhanced-select',
+					'css'               => 'min-width: 350px;',
+					'options'           => $this->get_free_membership_options_for_social_connect(),
+					'autoload'          => false,
+					'desc_tip'          => true,
+					'display_condition' => array(
+						'field'    => 'user_registration_membership_assign_free_on_social_connect',
+						'operator' => 'equals',
+						'value'    => 'yes',
+						'case'     => 'insensitive',
+					),
+				),
+			);
+
+			if ( null === $insert_at ) {
+				$settings_list = array_merge( $settings_list, $membership_fields );
+			} else {
+				array_splice( $settings_list, $insert_at, 0, $membership_fields );
+			}
+
+			return $settings;
+		}
+
+		/**
+		 * Build select options for active free membership plans.
+		 *
+		 * @since 5.3.0
+		 *
+		 * @return array
+		 */
+		private function get_free_membership_options_for_social_connect() {
+			$options = array(
+				'' => __( '— Select a Free membership —', 'user-registration' ),
+			);
+
+			$membership_service = new MembershipService();
+			$memberships        = $membership_service->list_active_memberships();
+
+			foreach ( $memberships as $membership ) {
+				$type = isset( $membership['type'] ) ? $membership['type'] : '';
+				if ( 'free' !== $type ) {
+					continue;
+				}
+
+				$id = isset( $membership['ID'] ) ? absint( $membership['ID'] ) : 0;
+				if ( ! $id ) {
+					continue;
+				}
+
+				$title          = isset( $membership['title'] ) ? $membership['title'] : (string) $id;
+				$options[ $id ] = $title;
+			}
+
+			return $options;
+		}
+
+		/**
+		 * Assign a default Free membership after Social Connect registration when pricing was skipped.
+		 *
+		 * Opt-in via Registration & Login → Social Connect → Advanced Settings. Skips users who already have a subscription.
+		 *
+		 * @since 5.3.0
+		 *
+		 * @param array $valid_form_data Validated form field data.
+		 * @param int   $form_id         Registration form ID (may be 0 for Social Connect).
+		 * @param int   $user_id         Newly created user ID.
+		 * @return void
+		 */
+		public function maybe_assign_default_free_membership_on_social_connect( $valid_form_data, $form_id, $user_id ) {
+			$user_id = absint( $user_id );
+
+			if ( ! $user_id || ! ur_check_module_activation( 'membership' ) ) {
+				return;
+			}
+
+			if ( ! ur_string_to_bool( get_option( 'user_registration_membership_assign_free_on_social_connect', false ) ) ) {
+				return;
+			}
+
+			// Social Connect sets this meta before firing user_registration_after_register_user_action.
+			if ( ! get_user_meta( $user_id, 'user_registration_social_connect_bypass_current_password', true ) ) {
+				return;
+			}
+
+			$membership_service = new MembershipService();
+			$membership_service->assign_default_free_membership_for_social_connect( $user_id );
 		}
 
 		/**
@@ -593,12 +742,52 @@ if ( ! class_exists( 'Admin' ) ) :
 				);
 			}
 
+			// Claim the coupon use before the order exists, so concurrent signups cannot pass its cap.
+			$claimed_coupon = '';
+			if ( ! empty( $data['coupon'] ) && ur_check_module_activation( 'coupon' ) && function_exists( 'ur_claim_coupon_usage' ) ) {
+				$coupon_check = ( new CouponService() )->validate(
+					array(
+						'coupon'        => sanitize_text_field( $data['coupon'] ),
+						'membership_id' => absint( $data['membership'] ),
+					)
+				);
+
+				// Only a coupon the order will apply consumes a use; prepare_members_data() drops the rest, but a used-up one is rejected rather than silently charged in full.
+				$coupon_details = $coupon_check['status'] ? array() : ur_get_coupon_details( sanitize_text_field( $data['coupon'] ) );
+				$coupon_used_up = ! empty( $coupon_details ) && function_exists( 'ur_coupon_has_remaining_uses' ) && ! ur_coupon_has_remaining_uses( $coupon_details );
+				if ( $coupon_used_up || ( $coupon_check['status'] && ! ur_claim_coupon_usage( $data['coupon'] ) ) ) {
+					wp_delete_user( absint( $member_id ) );
+					wp_send_json_error( array( 'message' => esc_html__( 'This coupon has reached its usage limit.', 'user-registration' ) ) );
+				}
+				if ( $coupon_check['status'] ) {
+					$claimed_coupon = sanitize_text_field( $data['coupon'] );
+				}
+			}
+
 			// Create order + subscription
 			// UR-4573: This is a fresh membership registration, so the membership role should
 			// replace the default role the registration assigned (not stack on top of it).
 			$data['is_initial_registration'] = true;
 			$membership_service              = new MembershipService();
 			$response                        = $membership_service->create_membership_order_and_subscription( $data );
+
+			if ( '' !== $claimed_coupon ) {
+				$orders_repository = new OrdersRepository();
+				$new_order         = empty( $response['status'] ) ? false : $orders_repository->retrieve( $response['order_id'] );
+
+				if ( ! $new_order ) {
+					ur_release_coupon_usage( $claimed_coupon );
+				} elseif ( 'completed' !== $new_order['status'] ) {
+					// Free and 100% coupon orders complete here and keep the use; the rest settle on their final status.
+					$orders_repository->update_order_meta(
+						array(
+							'order_id'   => $new_order['ID'],
+							'meta_key'   => 'urm_coupon_usage_claim', // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key -- insert into the order meta table.
+							'meta_value' => $claimed_coupon, // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_value -- insert into the order meta table.
+						)
+					);
+				}
+			}
 
 			// PaymentGatewayLogging — order creation + free activation
 			if ( $response['status'] && class_exists( 'WPEverest\URMembership\Admin\Services\PaymentGatewayLogging' ) ) {
@@ -658,6 +847,8 @@ if ( ! class_exists( 'Admin' ) ) :
 				$pg_data = $payment_service->build_response( $data );
 				if ( is_wp_error( $pg_data['payment_url'] ?? null ) ) {
 					$message = isset( $response['message'] ) ? $response['message'] : esc_html__( 'Sorry! There was an unexpected error while registering the user.', 'user-registration' );
+					// No payment can start on this order, so hand its coupon use back.
+					( new OrdersRepository() )->settle_coupon_claim( $data['order_id'], 'failed' );
 					wp_send_json_error( array( 'message' => $message ) );
 				}
 			}
@@ -1168,7 +1359,15 @@ if ( ! class_exists( 'Admin' ) ) :
 								if ( isset( $plan_details['type'] ) && 'subscription' === $plan_details['type'] ) {
 									$amount = $amount . ' / ' . $membership['billing_cycle'];
 								}
-								$expiry_date = 'subscription' === $plan_details['type'] && ! empty( $membership['expiry_date'] ) ? date_i18n( 'Y-m-d', strtotime( $membership['expiry_date'] ) ) : __( 'N/A', 'user-registration' );
+
+								$pending_cancel = get_user_meta( $user_id, 'urm_pending_cancel_' . ( $membership['subscription_id'] ?? '' ), true );
+								$is_renewing    = 'active' === ( $membership['status'] ?? '' ) && empty( $pending_cancel );
+
+								// A renewing subscription does not end on its next billing date, so only non-renewing ones fall back to it.
+								$raw_expiry  = ! empty( $membership['expiry_date'] ) ? $membership['expiry_date'] : ( $is_renewing ? '' : ( $membership['next_billing_date'] ?? '' ) );
+								$expiry_date = ( isset( $plan_details['type'] ) && 'subscription' === $plan_details['type'] && ! empty( $raw_expiry ) && strtotime( $raw_expiry ) )
+									? date_i18n( 'Y-m-d', strtotime( $raw_expiry ) )
+									: __( 'N/A', 'user-registration' );
 
 								?>
 								<tr>
