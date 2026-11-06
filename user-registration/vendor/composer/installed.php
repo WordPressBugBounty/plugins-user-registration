@@ -1,9 +1,9 @@
 <?php return array(
     'root' => array(
         'name' => 'wpeverest/user-registration',
-        'pretty_version' => '5.3.1',
-        'version' => '5.3.1.0',
-        'reference' => '495f7aed0dbb2040e1112b6dedbaad8ee6f3b9ee',
+        'pretty_version' => '5.3.2',
+        'version' => '5.3.2.0',
+        'reference' => 'd1247377263374098f19a4915d72d0ca0c3bdda3',
         'type' => 'wordpress-plugin',
         'install_path' => __DIR__ . '/../../',
         'aliases' => array(),
@@ -38,9 +38,9 @@
             'dev_requirement' => false,
         ),
         'wpeverest/user-registration' => array(
-            'pretty_version' => '5.3.1',
-            'version' => '5.3.1.0',
-            'reference' => '495f7aed0dbb2040e1112b6dedbaad8ee6f3b9ee',
+            'pretty_version' => '5.3.2',
+            'version' => '5.3.2.0',
+            'reference' => 'd1247377263374098f19a4915d72d0ca0c3bdda3',
             'type' => 'wordpress-plugin',
             'install_path' => __DIR__ . '/../../',
             'aliases' => array(),

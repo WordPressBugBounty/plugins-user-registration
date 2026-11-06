@@ -53,55 +53,54 @@ class UR_AJAX {
 		add_action( 'wp_ajax_nopriv_user_registration_nocache_headers', array( __CLASS__, 'add_nocache_headers' ) );
 
 		$ajax_events = array(
-			'user_input_dropped'                   => true,
-			'user_form_submit'                     => true,
-			'get_recent_nonce'                     => true,
-			'update_profile_details'               => true,
-			'profile_pic_upload'                   => true,
-			'ajax_login_submit'                    => true,
-			'send_test_email'                      => false,
-			'create_form'                          => false,
-			'rated'                                => false,
-			'dashboard_widget'                     => false,
-			'dismiss_notice'                       => false,
-			'dismiss_notice_per_user'              => false,
-			'import_form_action'                   => false,
-			'template_licence_check'               => false,
-			'captcha_setup_check'                  => false,
-			'install_extension'                    => false,
-			'profile_pic_remove'                   => false,
-			'form_save_action'                     => false,
-			'login_settings_save_action'           => false,
-			'embed_form_action'                    => false,
-			'embed_page_list'                      => false,
-			'allow_usage_dismiss'                  => false,
-			'cancel_email_change'                  => false,
-			'email_setting_status'                 => false,
-			'locked_form_fields_notice'            => false,
-			'search_global_settings'               => false,
-			'php_notice_dismiss'                   => false,
-			'locate_form_action'                   => false,
-			'form_preview_save'                    => false,
-			'generate_row_settings'                => false,
-			'my_account_selection_validator'       => false,
-			'lost_password_selection_validator'    => false,
-			'save_payment_settings'                => false,
-			'disable_user'                         => false,
-			'validate_payment_currency'            => false,
-			'save_captcha_settings'                => false,
-			'reset_captcha_keys'                   => false,
-			'reset_payment_keys'                   => false,
-			'create_default_form'                  => false,
-			'generate_required_pages'              => false,
-			'handle_default_wordpress_login'       => false,
-			'enable_emails'                        => false,
-			'skip_site_assistant_section'          => false,
-			'migrate_existing_users'               => false,
-			'login_settings_page_validation'       => false,
-			'activate_dependent_module'            => false,
-			'add_membership_field_to_default_form' => false,
-			'update_state_field'                   => true,
-			'toggle_logging'                       => false,
+			'user_input_dropped'                => true,
+			'user_form_submit'                  => true,
+			'get_recent_nonce'                  => true,
+			'update_profile_details'            => true,
+			'profile_pic_upload'                => true,
+			'ajax_login_submit'                 => true,
+			'send_test_email'                   => false,
+			'create_form'                       => false,
+			'rated'                             => false,
+			'dashboard_widget'                  => false,
+			'dismiss_notice'                    => false,
+			'dismiss_notice_per_user'           => false,
+			'import_form_action'                => false,
+			'template_licence_check'            => false,
+			'captcha_setup_check'               => false,
+			'install_extension'                 => false,
+			'profile_pic_remove'                => false,
+			'form_save_action'                  => false,
+			'login_settings_save_action'        => false,
+			'embed_form_action'                 => false,
+			'embed_page_list'                   => false,
+			'allow_usage_dismiss'               => false,
+			'cancel_email_change'               => false,
+			'email_setting_status'              => false,
+			'locked_form_fields_notice'         => false,
+			'search_global_settings'            => false,
+			'php_notice_dismiss'                => false,
+			'locate_form_action'                => false,
+			'form_preview_save'                 => false,
+			'generate_row_settings'             => false,
+			'my_account_selection_validator'    => false,
+			'lost_password_selection_validator' => false,
+			'save_payment_settings'             => false,
+			'disable_user'                      => false,
+			'validate_payment_currency'         => false,
+			'save_captcha_settings'             => false,
+			'reset_captcha_keys'                => false,
+			'reset_payment_keys'                => false,
+			'create_default_form'               => false,
+			'generate_required_pages'           => false,
+			'handle_default_wordpress_login'    => false,
+			'enable_emails'                     => false,
+			'skip_site_assistant_section'       => false,
+			'migrate_existing_users'            => false,
+			'login_settings_page_validation'    => false,
+			'activate_dependent_module'         => false,
+			'update_state_field'                => true,
+			'toggle_logging'                    => false,
 		);
 
 		foreach ( $ajax_events as $ajax_event => $nopriv ) {
@@ -220,8 +219,7 @@ class UR_AJAX {
 	 * @return void
 	 */
 	public static function user_form_submit() {
-		$nonce_value = isset( $_POST['ur_frontend_form_nonce'] ) ? wp_unslash( sanitize_key( $_POST['ur_frontend_form_nonce'] ) ) : '';
-		ur_process_registration( $nonce_value );
+		ur_process_registration();
 	}
 
 
@@ -2352,68 +2350,13 @@ class UR_AJAX {
 	}
 
 	public static function get_recent_nonce() {
-		// Public forms need public nonce refresh. A request referer is not authorization.
-		if ( ( isset( $_POST['nonce_for'] ) && ! is_string( $_POST['nonce_for'] ) ) ||
-			( isset( $_POST['form_ids'] ) && ! is_string( $_POST['form_ids'] ) ) ) {
-			wp_send_json_error( array( __( 'Invalid nonce request.', 'user-registration' ) ), 400 );
-		}
+		// Only the login form needs a public nonce refresh. A request referer is not authorization.
 		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- Public guest nonce refresh does not require an existing nonce.
-		$for = isset( $_POST['nonce_for'] ) ? sanitize_key( wp_unslash( $_POST['nonce_for'] ) ) : 'registration';
-		// phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Public refresh; IDs are strictly validated below.
-		$form_ids = isset( $_POST['form_ids'] ) ? array_unique( array_filter( explode( ',', wp_unslash( $_POST['form_ids'] ) ) ) ) : array();
-		if ( ! in_array( $for, array( 'login', 'registration' ), true ) || count( $form_ids ) > 100 ) {
+		if ( ! isset( $_POST['nonce_for'] ) || 'login' !== $_POST['nonce_for'] ) {
 			wp_send_json_error( array( __( 'Invalid nonce request.', 'user-registration' ) ), 400 );
 		}
 
-		if ( 'registration' === $for ) {
-
-			if ( empty( $form_ids ) ) {
-				wp_send_json_error(
-					array(
-						__( 'Form ID is missing!', 'user-registration' ),
-					)
-				);
-			}
-			foreach ( $form_ids as $form_id ) {
-				if ( ! ctype_digit( $form_id ) || (int) $form_id < 1 ) {
-					wp_send_json_error( array( __( 'Invalid form ID.', 'user-registration' ) ), 400 );
-				}
-				$post = get_post( (int) $form_id );
-				if ( ! $post || 'user_registration' !== $post->post_type ||
-					( 'publish' !== $post->post_status && ! current_user_can( 'edit_post', (int) $form_id ) ) ) {
-					wp_send_json_error( array( __( 'Form not found!', 'user-registration' ) ), 404 );
-				}
-				$form = ur_get_form_fields( $form_id );
-				if ( empty( $form ) ) {
-					wp_send_json_error(
-						array(
-							__( 'Form not found!', 'user-registration' ),
-						)
-					);
-				}
-			}
-		}
-
-		$updated_nonce_array = array();
-		switch ( $for ) {
-			case 'registration':
-				foreach ( $form_ids as $form_id ) {
-					$updated_nonce_array[ $form_id ] = wp_create_nonce( 'ur_frontend_form_id-' . $form_id );
-				}
-				break;
-			default:
-				$updated_nonce_array = wp_create_nonce( 'ur_login_form_save_nonce' );
-				break;
-		}
-
-		if ( empty( $updated_nonce_array ) ) {
-			wp_send_json_error(
-				array(
-					__( 'Nonce could not be updated', 'user-registration' ),
-				)
-			);
-		}
-		wp_send_json_success( $updated_nonce_array );
+		wp_send_json_success( wp_create_nonce( 'ur_login_form_save_nonce' ) );
 	}
 
 	public static function validate_payment_currency() {
